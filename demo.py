@@ -1,10 +1,12 @@
 import argparse
+import json
 
 import cv2
 import numpy as np
 import torch
 
 from models.with_mobilenet import PoseEstimationWithMobileNet
+from modules.activity_fsm import ActivityFSM
 from modules.keypoints import extract_keypoints, group_keypoints
 from modules.load_state import load_state
 from modules.pose import Pose, propagate_ids
@@ -51,6 +53,11 @@ class VideoReader(object):
         return img
 
 
+def get_activity_fsm(file_name):
+    with open(file_name) as activity_file:
+        return ActivityFSM(json.load(activity_file))
+
+
 def infer_fast(net, img, net_input_height_size, stride, upsample_ratio, cpu,
                pad_value=(0, 0, 0), img_mean=(128, 128, 128), img_scale=1/256):
     height, width, _ = img.shape
@@ -78,54 +85,72 @@ def infer_fast(net, img, net_input_height_size, stride, upsample_ratio, cpu,
     return heatmaps, pafs, scale, pad
 
 
-def run_demo(net, image_provider, height_size, cpu, track_ids):
+def draw_pose(net, img, height_size, cpu, track_ids, num_keypoints, previous_poses):
+    stride = 8
+    upsample_ratio = 4
+
+    orig_img = img.copy()
+    heatmaps, pafs, scale, pad = infer_fast(net, img, height_size, stride, upsample_ratio, cpu)
+
+    total_keypoints_num = 0
+    all_keypoints_by_type = []
+    for kpt_idx in range(num_keypoints):  # 19th for bg
+        total_keypoints_num += extract_keypoints(heatmaps[:, :, kpt_idx], all_keypoints_by_type,
+                                                 total_keypoints_num)
+
+    pose_entries, all_keypoints = group_keypoints(all_keypoints_by_type, pafs, demo=True)
+    for kpt_id in range(all_keypoints.shape[0]):
+        all_keypoints[kpt_id, 0] = (all_keypoints[kpt_id, 0] * stride / upsample_ratio - pad[1]) / scale
+        all_keypoints[kpt_id, 1] = (all_keypoints[kpt_id, 1] * stride / upsample_ratio - pad[0]) / scale
+    current_poses = []
+    for n in range(len(pose_entries)):
+        if len(pose_entries[n]) == 0:
+            continue
+        pose_keypoints = np.ones((num_keypoints, 2), dtype=np.int32) * -1
+        for kpt_id in range(num_keypoints):
+            if pose_entries[n][kpt_id] != -1.0:  # keypoint was found
+                pose_keypoints[kpt_id, 0] = int(all_keypoints[int(pose_entries[n][kpt_id]), 0])
+                pose_keypoints[kpt_id, 1] = int(all_keypoints[int(pose_entries[n][kpt_id]), 1])
+        pose = Pose(pose_keypoints, pose_entries[n][18])
+        current_poses.append(pose)
+        pose.draw(img)
+
+    img = cv2.addWeighted(orig_img, 0.6, img, 0.4, 0)
+    if track_ids:
+        propagate_ids(previous_poses, current_poses)
+        previous_poses = current_poses
+        # print('\n'.join(['confidence: %f point: %s' %
+        #                  (pose.confidence, np.array_str(pose.keypoints))
+        #                  for pose in current_poses]))
+        for pose in current_poses:
+            cv2.rectangle(img, (pose.bbox[0], pose.bbox[1]),
+                          (pose.bbox[0] + pose.bbox[2], pose.bbox[1] + pose.bbox[3]), (0, 255, 0))
+            cv2.putText(img, 'id: {}'.format(pose.id), (pose.bbox[0], pose.bbox[1] - 16),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 0, 255))
+        cv2.imshow('Lightweight Human Pose Estimation Python Demo', img)
+
+    return previous_poses
+
+
+def run_demo(activity_fsm, net, image_provider, height_size, cpu, track_ids):
     net = net.eval()
     if not cpu:
         net = net.cuda()
 
-    stride = 8
-    upsample_ratio = 4
-    num_keypoints = Pose.num_kpts
     previous_poses = []
     for img in image_provider:
-        orig_img = img.copy()
-        heatmaps, pafs, scale, pad = infer_fast(net, img, height_size, stride, upsample_ratio, cpu)
+        previous_poses = draw_pose(net, img, height_size, cpu, track_ids, Pose.num_kpts, previous_poses)
+        print(previous_poses)
+        if len(previous_poses) > 0:
+            leaf, next, info = activity_fsm.update(previous_poses[0])
+            print(info)
+            key = cv2.waitKey(33)
+            if key == 27 or leaf:  # esc
+                return
+        else:
+            if key == 27:
+                return
 
-        total_keypoints_num = 0
-        all_keypoints_by_type = []
-        for kpt_idx in range(num_keypoints):  # 19th for bg
-            total_keypoints_num += extract_keypoints(heatmaps[:, :, kpt_idx], all_keypoints_by_type, total_keypoints_num)
-
-        pose_entries, all_keypoints = group_keypoints(all_keypoints_by_type, pafs, demo=True)
-        for kpt_id in range(all_keypoints.shape[0]):
-            all_keypoints[kpt_id, 0] = (all_keypoints[kpt_id, 0] * stride / upsample_ratio - pad[1]) / scale
-            all_keypoints[kpt_id, 1] = (all_keypoints[kpt_id, 1] * stride / upsample_ratio - pad[0]) / scale
-        current_poses = []
-        for n in range(len(pose_entries)):
-            if len(pose_entries[n]) == 0:
-                continue
-            pose_keypoints = np.ones((num_keypoints, 2), dtype=np.int32) * -1
-            for kpt_id in range(num_keypoints):
-                if pose_entries[n][kpt_id] != -1.0:  # keypoint was found
-                    pose_keypoints[kpt_id, 0] = int(all_keypoints[int(pose_entries[n][kpt_id]), 0])
-                    pose_keypoints[kpt_id, 1] = int(all_keypoints[int(pose_entries[n][kpt_id]), 1])
-            pose = Pose(pose_keypoints, pose_entries[n][18])
-            current_poses.append(pose)
-            pose.draw(img)
-
-        img = cv2.addWeighted(orig_img, 0.6, img, 0.4, 0)
-        if track_ids == True:
-            propagate_ids(previous_poses, current_poses)
-            previous_poses = current_poses
-            for pose in current_poses:
-                cv2.rectangle(img, (pose.bbox[0], pose.bbox[1]),
-                              (pose.bbox[0] + pose.bbox[2], pose.bbox[1] + pose.bbox[3]), (0, 255, 0))
-                cv2.putText(img, 'id: {}'.format(pose.id), (pose.bbox[0], pose.bbox[1] - 16),
-                            cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 0, 255))
-        cv2.imshow('Lightweight Human Pose Estimation Python Demo', img)
-        key = cv2.waitKey(33)
-        if key == 27:  # esc
-            return
 
 
 if __name__ == '__main__':
@@ -152,4 +177,5 @@ if __name__ == '__main__':
     if args.video != '':
         frame_provider = VideoReader(args.video)
 
-    run_demo(net, frame_provider, args.height_size, args.cpu, args.track_ids)
+    activity_fsm = get_activity_fsm('data/activities/standing-is-the-best-exercise.json')
+    run_demo(activity_fsm, net, frame_provider, args.height_size, args.cpu, args.track_ids)

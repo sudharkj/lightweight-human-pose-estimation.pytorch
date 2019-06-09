@@ -1,0 +1,22 @@
+[
+  {
+    "name": "stand-straight",
+    "image": "file-name",
+    "corrections": [
+      {
+        "joint_1": {
+          "start": "r_sho",
+          "end": "r_elb"
+        },
+        "joint_2": {
+          "start": "r_elb",
+          "end": "r_wri"
+        },
+        "angle": 0.0,
+        "deviation": 0.5,
+        "message": "exercise doesn't match"
+      }
+    ],
+    "message": "Perfect!!!"
+  }
+]
