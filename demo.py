@@ -140,7 +140,7 @@ def run_demo(activity_fsm, net, image_provider, height_size, cpu, track_ids):
     previous_poses = []
     for img in image_provider:
         previous_poses = draw_pose(net, img, height_size, cpu, track_ids, Pose.num_kpts, previous_poses)
-        print(previous_poses)
+        # print(previous_poses)
         if len(previous_poses) > 0:
             leaf, next, info = activity_fsm.update(previous_poses[0])
             print(info)
@@ -148,9 +148,9 @@ def run_demo(activity_fsm, net, image_provider, height_size, cpu, track_ids):
             if key == 27 or leaf:  # esc
                 return
         else:
+            key = cv2.waitKey(33)
             if key == 27:
                 return
-
 
 
 if __name__ == '__main__':

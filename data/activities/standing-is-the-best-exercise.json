@@ -1,6 +1,6 @@
 [
   {
-    "name": "stand-straight",
+    "name": "straighten arms",
     "image": "file-name",
     "corrections": [
       {
@@ -13,10 +13,25 @@
           "end": "r_wri"
         },
         "angle": 0.0,
-        "deviation": 0.5,
-        "message": "exercise doesn't match"
+        "deviation": 0.15,
+        "message": "Right arm not straight"
+      },
+      {
+        "joint_1": {
+          "start": "l_sho",
+          "end": "l_elb"
+        },
+        "joint_2": {
+          "start": "l_elb",
+          "end": "l_wri"
+        },
+        "angle": 0.0,
+        "deviation": 0.15,
+        "message": "Left arm not straight"
       }
     ],
     "message": "Perfect!!!"
   }
 ]
+
+
